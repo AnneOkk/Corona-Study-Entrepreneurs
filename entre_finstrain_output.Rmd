@@ -1,0 +1,925 @@
+---
+title: 'Study Results: Corona Study'
+author: "Anne-Kathrin Kleine"
+date: ""
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '1'
+---
+
+```{r loading_packs, eval = T, include = F, echo = F}
+knitr::opts_chunk$set(include = T, echo = F, warning = F, message = F)
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+packages <- c("mediation", "foreign", "tidyverse","stargazer","multicon", "ggplot2", "plyr", "reshape2", "readxl", 
+              "scales", "grid", "tidyLPA", "Rcpp", "naniar", "dplyr", "car", "mice", 
+              "rstudioapi", "labelled", "modi", "semPlot", "kulife", "nlme", "ICC", "multilevel")
+ipak(packages)
+```
+
+```{r setwd}
+# library(rstudioapi)
+#  set_wd <- function() {
+#    current_path <- getActiveDocumentContext()$path 
+#    setwd(dirname(current_path ))
+#    print( getwd() )
+#  }
+#  set_wd()
+
+```
+
+```{r loading_data}
+
+library(rlang)
+library(tidyverse)
+library(foreign)
+
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+
+files <- dir(getwd(), pattern = "\\.sav$", full.names = FALSE) 
+df_list <- vector("list", length(files))
+names(df_list) <- files
+read_in <- function(df = files) {
+  for (fname in df) {
+    df_list[[fname]] <- haven::read_sav(fname, encoding = NULL, user_na = FALSE, col_select = NULL,skip = 0, n_max = Inf, .name_repair = "unique") 
+  }
+    names(df_list) <- paste0("", gsub(".sav","",names(df_list)))
+    ff <- df_list
+}
+
+
+df_list <- read_in(files)
+
+list2env(df_list,envir=.GlobalEnv)
+
+df <- as.data.frame(df)
+  
+```
+
+```{r}
+# Rename
+names(df) <- gsub("PFS0", "fin_strain0", names(df), fixed = TRUE)
+```
+
+# Corona study 
+
+## Entrepreneurship sample, countries
+
+```{r}
+df_e <- df %>% filter(!is.na(w4_employstatus_14))
+
+df_e <-  df_e[!is.na(df_e$w5_SE_quit),] 
+
+library(janitor)
+tabyl(df_e$coded_country, sort = F)
+
+
+df_e$coded_country_text <- df_e$coded_country
+```
+
+
+## Get difference baseline w5
+
+```{r}
+df_e$date_diff <- difftime(df_e$w5_StartDate, df_e$StartDate)
+```
+
+
+## Reliabilities 
+
+```{r include = T}
+
+
+library(multicon)
+comp_dat <- df_e %>%
+  dplyr::select(posrefocus01, posrefocus02, posrefocus03, probSolving01, probSolving02, probSolving03, fin_strain01, fin_strain02, fin_strain03) 
+
+alph_dat <- comp_dat
+
+comp_split <- comp_dat %>%
+  split.default(sub("0.*", "", names(comp_dat))) 
+
+alph_split <- alph_dat %>%
+  split.default(sub("0.*", "", names(alph_dat))) 
+
+comp <- purrr::map(comp_split, ~ multicon::composite(.x, nomiss = 0.8), data = .x)
+alph <- purrr::map(alph_split, ~ psych::alpha(.x), data = .x) %>%
+  purrr::map(~ .x$total)
+
+# add demos
+comp_df <- as.data.frame(do.call("cbind", comp))
+alph_df <- do.call("rbind", alph) %>% round(., 2)
+
+alph_df %>%
+DT::datatable(
+    extensions = 'Buttons', 
+    options = list(dom = 'Bfrtip', 
+                   buttons = c('excel', "csv"),
+                   pageLength = 20))
+
+df_e$w7_employstatus_11[is.na(df_e$w7_employstatus_11)] <- 0
+df_e$w7_employstatus_12[is.na(df_e$w7_employstatus_12)] <- 0
+
+df_e <- cbind(df_e, comp_df)
+
+
+df_e$fin_stress01 <- df_e$fin_strain01
+df_e$fin_stress02 <- df_e$fin_strain03
+
+
+```
+
+## Correlations
+
+```{r, include = T}
+
+corstars <-function(x, method=c("pearson", "spearman"), removeTriangle=c("upper", "lower", "none"),
+                     result=c("none", "html", "latex")){
+    #Compute correlation matrix
+    require(Hmisc)
+    x <- as.matrix(x)
+    correlation_matrix<-rcorr(x, type=method[1])
+    R <- correlation_matrix$r # Matrix of correlation coeficients
+    p <- correlation_matrix$P # Matrix of p-value 
+    
+    ## Define notions for significance levels; spacing is important.
+    mystars <- ifelse(p < .001, "*** ", ifelse(p < .01, "**  ", ifelse(p < .05, "*   ", "    ")))
+    
+    ## trunctuate the correlation matrix to two decimal
+    R <- format(round(cbind(rep(-1.11, ncol(x)), R), 2))[,-1]
+    
+    ## build a new matrix that includes the correlations with their apropriate stars
+    Rnew <- matrix(paste(R, mystars, sep=""), ncol=ncol(x))
+    diag(Rnew) <- paste(diag(R), " ", sep="")
+    rownames(Rnew) <- colnames(x)
+    colnames(Rnew) <- paste(colnames(x), "", sep="")
+    
+    ## remove upper triangle of correlation matrix
+    if(removeTriangle[1]=="upper"){
+      Rnew <- as.matrix(Rnew)
+      Rnew[upper.tri(Rnew, diag = TRUE)] <- ""
+      Rnew <- as.data.frame(Rnew)
+    }
+    
+    ## remove lower triangle of correlation matrix
+    else if(removeTriangle[1]=="lower"){
+      Rnew <- as.matrix(Rnew)
+      Rnew[lower.tri(Rnew, diag = TRUE)] <- ""
+      Rnew <- as.data.frame(Rnew)
+    }
+    else if(removeTriangle[1]=="none"){
+      Rnew <- as.matrix(Rnew)
+      Rnew <- as.data.frame(Rnew)
+    }
+    
+    ## remove last column and return the correlation matrix
+    Rnew <- cbind(Rnew[1:length(Rnew)-1])
+    if (result[1]=="none") return(Rnew)
+    else{
+      if(result[1]=="html") print(xtable(Rnew), type="html")
+      else print(xtable(Rnew), type="latex") 
+    }
+} 
+library(kableExtra)
+
+corstar <- data.frame(corstars(comp_df, removeTriangle = "none", result="none"))
+
+corstars_2 <-function(x, method=c("pearson", "spearman"), removeTriangle=c("upper", "lower", "none"),
+                     result=c("none", "html", "latex")){
+    #Compute correlation matrix
+    require(Hmisc)
+    x <- as.matrix(x)
+    correlation_matrix<-rcorr(x, type=method[1])
+    R <- correlation_matrix$r # Matrix of correlation coeficients
+    
+    ## trunctuate the correlation matrix to two decimal
+    R <- format(round(cbind(rep(-1.11, ncol(x)), R), 2))[,-1]
+    
+    ## build a new matrix that includes the correlations with their apropriate stars
+    Rnew <- matrix(R, ncol=ncol(x))
+    diag(Rnew) <- paste(diag(R), " ", sep="")
+    rownames(Rnew) <- colnames(x)
+    colnames(Rnew) <- paste(colnames(x), "", sep="")
+    
+    ## remove upper triangle of correlation matrix
+    if(removeTriangle[1]=="upper"){
+      Rnew <- as.matrix(Rnew)
+      Rnew[upper.tri(Rnew, diag = TRUE)] <- ""
+      Rnew <- as.data.frame(Rnew)
+    }
+    
+    ## remove lower triangle of correlation matrix
+    else if(removeTriangle[1]=="lower"){
+      Rnew <- as.matrix(Rnew)
+      Rnew[lower.tri(Rnew, diag = TRUE)] <- ""
+      Rnew <- as.data.frame(Rnew)
+    }
+    
+    else if(removeTriangle[1]=="none"){
+      Rnew <- as.matrix(Rnew)
+      Rnew <- as.data.frame(Rnew)
+    }
+    
+    ## remove last column and return the correlation matrix
+    Rnew <- cbind(Rnew[1:length(Rnew)-1])
+    if (result[1]=="none") return(Rnew)
+    else{
+      if(result[1]=="html") print(xtable(Rnew), type="html")
+      else print(xtable(Rnew), type="latex") 
+    }
+} 
+
+study_comp_df <- df_e %>% dplyr::select(matches("w1_jbInsec|date_diff|w5_jbInsec|w9_jbInsec|w11_jbInsec|w12_jbInsec|hours_worked|employees|start|learn|quit|fin_strain|w5_mentHealth|w7_mentHealth|w9_mentHealth|w11_mentHealth|w12_mentHealth|happy|lifeSat|MLQ|
+                                                _SE|probSolving|posrefocus|csq|sleepQ|depressed|gender|age|edu")) %>% dplyr::select(-matches("fin_strain01|fin_strain02|fin_strain03|w1_fin_strain01|w2_fin_strain01|w3_fin_strain01|w4_fin_strain01|w8_happy|w2_hours_worked_1|w3_hours_worked_1|w4_hours_worked_1|w12_hours_worked_1|w1_MLQ|probSolving01|probSolving02|probSolving03|w4_probSolving01|posrefocus01|posrefocus02|posrefocus03|w4_posrefocus01|w1_lifeSat|w4_lifeSat"))
+
+study_comp_df$date_diff <- as.numeric(study_comp_df$date_diff)
+
+study_comp_df <- study_comp_df %>% select_if(is.numeric)
+
+cor <- round(cor(study_comp_df, use="pairwise.complete.obs"), 2)
+
+
+corstar_select_p <- data.frame(corstars(study_comp_df, removeTriangle = "none", result="none"))
+
+corstar_select_p %>%
+  DT::datatable(
+    extensions = 'Buttons', 
+    options = list(dom = 'Bfrtip', 
+                   buttons = c('excel', "csv"),
+                   pageLength = 35,
+                  lengthMenu = c(25, 50, 75, 94)))
+
+```
+
+
+## Coping as a moderator of the effects of financial strain on T5 intention to quit
+
+```{r include = T, echo = T}
+library(semTools)
+df_e$fin_strain_scale <- scale(df_e$fin_strain, scale = F)
+df_e$probSolving_scale <- scale(df_e$probSolving, scale = F)
+df_e$posrefocus_scale <- scale(df_e$posrefocus, scale = F)
+
+df_e$coded_country <- as.numeric(as.factor(df_e$coded_country))
+
+
+library(hglm)
+
+model0 <- lm(w5_SE_quit ~  w5_SE_start + age , data = df_e)
+model1 <- lm(w5_SE_quit ~  w5_SE_start + age +  fin_strain_scale, data = df_e)
+model2 <- lm(w5_SE_quit ~  w5_SE_start + age  + fin_strain_scale + probSolving_scale, data = df_e)
+model3 <- lm(w5_SE_quit ~  w5_SE_start + age   + fin_strain_scale*probSolving_scale, data = df_e)
+
+
+summary(model3)
+anova(model0, model1, model2, model3)
+
+library(MASS)
+df_e$w5_SE_quit <- df_e$w5_SE_quit + 4
+boxcox(model3, plotit = TRUE)
+
+bc <- boxcox(w5_SE_quit ~  w5_SE_start + age   + fin_strain_scale*probSolving_scale, data = df_e)
+(lambda <- bc$x[which.max(bc$y)])
+
+df_e$w5_SE_quit_box <- (df_e$w5_SE_quit ^ lambda -1) / lambda
+
+model3 <- lm(w5_SE_quit_box ~  w5_SE_start + age   + fin_strain_scale*probSolving_scale, data = df_e)
+summary(model3)
+
+model4 <- lm(w5_SE_quit_box ~  fin_strain_scale*probSolving_scale, data = df_e)
+summary(model4)
+```
+
+### Simple slopes
+
+```{r}
+library(effects)
+library(interactions)
+interactions::sim_slopes(model = model4, pred = fin_strain_scale, modx = probSolving_scale)
+
+
+min.Sd <- -(sd(df_e$probSolving_scale, na.rm = T))
+max.Sd <- (sd(df_e$probSolving_scale, na.rm = T))
+
+min.Sd_f <- -(sd(df_e$fin_strain_scale, na.rm = T))
+max.Sd_f <- (sd(df_e$fin_strain_scale, na.rm = T))
+
+
+#Run the interaction 
+Inter.HandPick <- effect('fin_strain_scale*probSolving_scale', model4,
+                                              xlevels=list(fin_strain_scale = c(min.Sd_f, 0, max.Sd_f),
+                                              probSolving_scale = c(min.Sd, 0, max.Sd)),
+                                              se=TRUE, confidence.level=.95, typical=mean)
+
+#Put data in data frame 
+Inter.HandPick <- as.data.frame(Inter.HandPick)
+
+Inter.HandPick$probsolv <- as.factor(Inter.HandPick$probSolving_scale)
+                     
+#Create a factor of the Work Ethic variable used in the interaction 
+Inter.HandPick$fin_strain <- as.factor(Inter.HandPick$fin_strain_scale)
+
+Inter.HandPick$fin_strain <- c("1 SD below", "0", "1 SD above")
+
+
+
+library(ggplot2)                
+Plot.HandPick<-ggplot(data=Inter.HandPick, aes(x=probsolv, y=fit, group=fin_strain))+
+      geom_line(size=2, aes(color=fin_strain))+
+      ylim(0,4)+
+      ylab("Transformed quit intention")+
+      xlab("Problem focused coping")+
+      ggtitle("Hand Picked Plot") +
+     scale_y_continuous(limits = c(0, 1)) +
+  scale_x_discrete(labels = c("1 SD below", "0", "1 SD above"))
+
+Plot.HandPick
+```
+
+## Coping as a moderator of the effects of financial strain on T5 life satisfaction
+
+```{r include = T, echo = T}
+library(semTools)
+model1 <- lm(w5_lifeSat ~  fin_strain_scale, data = df_e)
+model2 <- lm(w5_lifeSat ~  fin_strain_scale + probSolving_scale, data = df_e)
+model3 <- lm(w5_lifeSat ~  fin_strain_scale*probSolving_scale, data = df_e)
+
+summary(model3)
+
+anova(model1, model2, model3)
+```
+
+## Coping as a moderator of the effects of financial strain on T11 life satisfaction
+
+```{r include = T, echo = T}
+library(semTools)
+model1 <- lm(w11_lifeSat ~  fin_strain_scale + w5_lifeSat, data = df_e)
+model2 <- lm(w11_lifeSat ~  fin_strain_scale + probSolving_scale + w5_lifeSat, data = df_e)
+model3 <- lm(w11_lifeSat ~  fin_strain_scale*probSolving_scale + w5_lifeSat, data = df_e)
+
+summary(model3)
+
+anova(model1, model2, model3)
+
+model4 <- lm(w11_lifeSat ~  fin_strain_scale*probSolving_scale + w5_lifeSat + w5_SE_start + age + edu + coded_country + date_diff, data = df_e)
+summary(model4)
+
+```
+
+## Moderated mediation: T1 Finstrain*Problemcoping > T2 Intention to quit  > T3  Life Satisfaction 
+
+```{r include = T, echo = T}
+# Only center a subset
+cols <- c(202,117,118,203,204,130:164,190:195)
+vars <- colnames(df_e)[cols]
+
+df_e_scale <- df_e %>% 
+  mutate_at(vars, scale, scale = FALSE)
+
+
+Mod.Med.Lavaan <- '
+#Regressions
+w5_SE_quit ~ a1*fin_strain + a2*probSolving + a3*fin_strain:probSolving + w5_SE_start + age
+w7_lifeSat ~ cdash1*fin_strain + cdash2*probSolving + cdash3*fin_strain:probSolving + b1*w5_SE_quit
+
+#Mean of centered (for use in simple slopes)
+#This is making a coefficient which equals the intercept because of the "1"
+#(Y~1) gives you the intercept, which is the mean for our variable
+probSolving ~ probSolving.mean*1
+
+#Variance of centered  (for use in simple slopes)
+#This is making a coefficient  which equals the variance because of the "~~"
+#Two tildes separating the same variable gives you the variance
+probSolving ~~ probSolving.var*probSolving
+
+#Indirect effects conditional on moderator (a1 + a3*ModValue)*b1
+indirect.SDbelow := (a1 + a3*(probSolving.mean-sqrt(probSolving.var)))*b1
+indirect.SDabove := (a1 + a3*(probSolving.mean+sqrt(probSolving.var)))*b1
+
+#Direct effects conditional on moderator (cdash1 + cdash3*ModValue)
+#We have to do it this way because you cannot call the mean and sd functions in lavaan package
+direct.SDbelow := cdash1 + cdash3*(probSolving.mean-sqrt(probSolving.var)) 
+direct.SDabove := cdash1 + cdash3*(probSolving.mean+sqrt(probSolving.var))
+
+#Total effects conditional on moderator
+total.SDbelow := direct.SDbelow + indirect.SDbelow
+total.SDabove := direct.SDabove + indirect.SDabove
+
+#Proportion mediated conditional on moderator
+#To match the output of "mediate" package
+prop.mediated.SDbelow := indirect.SDbelow / total.SDbelow
+prop.mediated.SDabove := indirect.SDabove / total.SDabove
+
+#Index of moderated mediation
+#An alternative way of testing if conditional indirect effects are significantly different from each other
+index.mod.med := a3*b1
+'
+
+#Fit model
+Mod.Med.SEM <- sem(model = Mod.Med.Lavaan,
+                   data = df_e_scale,
+                   se = "bootstrap",
+                   bootstrap = 1000)
+
+#Fit measures
+summary(Mod.Med.SEM,
+        fit.measures = FALSE,
+        standardize = TRUE,
+        rsquare = TRUE)
+```
+
+
+# Vignette data
+
+```{r}
+library(haven)
+library(stringr)
+vignette_df <- read_sav("Vignette_df.sav")
+vignette_df <- vignette_df[str_length(vignette_df$ID) > 19, ]
+
+vignette_df <- vignette_df %>% dplyr::mutate(exp_cond = ifelse(group == "control", 1,
+                                             ifelse(group == "intervention", 2, NA)))
+
+```
+
+## Attention checks
+
+``` {r}
+
+vignette_df_fails = vignette_df %>% dplyr::select(chal_4,threat_4,satis_4)
+
+## create attention fails df 
+att_1 <- vignette_df[vignette_df$chal_4 %in% c(1, 2, 3, 5), ]
+att_2 <- vignette_df[vignette_df$threat_4 %in% c(1,2, 3, 5), ]
+att_3 <- vignette_df[vignette_df$satis_4 %in% c(1, 3, 4, 5, 6, 7), ]
+
+library(tibble)
+
+attention_fail <- rbind(att_1, att_2, att_3) %>%
+  as_tibble(.)
+
+ID_vals <- data.frame(table(attention_fail$ID))
+Rows_fails <- attention_fail$ID %in% ID_vals[ID_vals$Freq > 1,1]
+Att_fails <- attention_fail[Rows_fails,]
+
+(data.frame(table(Att_fails$ID)))
+
+## exclude attention fails (two or more fails)
+vignette_df <- vignette_df[!(vignette_df$ID %in% Att_fails$ID),]
+
+
+vignette_df <- vignette_df[ , -which(names(vignette_df) %in% c("chal_4","threat_4", "satis_4"))]
+```
+
+
+## Reliabilities 
+
+```{r include = T}
+library(multicon)
+library(sjlabelled)
+library(lubridate)
+library(stringr)
+library(zoo)
+library(tidyverse)
+vignette_df$year <- as.numeric(names(attr(vignette_df$year_1,"labels")[match(vignette_df$year_1,attr(vignette_df$year_1,"labels"))]))
+
+vignette_df$age <- as.numeric(names(attr(vignette_df$age_1,"labels")[match(vignette_df$age_1,attr(vignette_df$age_1,"labels"))]))
+
+
+vignette_df$month <- (names(attr(vignette_df$month_1,"labels")[match(vignette_df$month_1,attr(vignette_df$month_1,"labels"))]))
+
+
+vignette_df$t1timebuiss <- as.yearmon(paste(vignette_df$year, vignette_df$month), "%Y %b")
+
+vignette_df$t1timebuiss <- as_date(vignette_df$t1timebuiss)
+
+vignette_df$RecordedDate <- as_date(vignette_df$RecordedDate)
+
+vignette_df$quitting1 <- vignette_df$quit1_1
+
+
+vignette_df$t1timebuiss <- as.numeric(difftime(vignette_df$RecordedDate, vignette_df$t1timebuiss, UTC,
+         units = c("days")))
+
+
+comp_dat <-  vignette_df %>% dplyr::select(matches("cope|mani|chal|threat|quit|satis|PANA")) %>% remove_all_labels(.) %>% dplyr::select(!matches("quitting1")) 
+
+comp_dat <- comp_dat %>% dplyr::rename(quit_1 = quit1_1, 
+                                       quit_2 = quit2_1,
+                                       quit_3 = quit2_2,
+                                       PA_5 = PANA_10,
+                                       NA_1 = PANA_1,
+                                       NA_2 = PANA_2,
+                                       NA_3 = PANA_3,
+                                       NA_4 = PANA_4,
+                                       NA_5 = PANA_5,
+                                       PA_1 = PANA_6,
+                                       PA_2 = PANA_7,
+                                       PA_3 = PANA_8,
+                                       PA_4 = PANA_9) 
+
+
+
+comp_dat_single_item <- vignette_df %>% dplyr::select(matches("finsit|exp_cond|t1timebuiss|found|coown|indu|age|gender|lang|edu|quitting1")) %>% dplyr::select(!matches("UserLanguage|Page_Submit|_TEXT|ifelse|age_1")) 
+
+
+  
+alph_dat <- comp_dat
+
+comp_split <- comp_dat %>%
+  split.default(sub("_.*", "", names(comp_dat))) 
+
+alph_split <- alph_dat %>%
+  split.default(sub("_.*", "", names(alph_dat))) 
+
+comp <- purrr::map(comp_split, ~ multicon::composite(.x, nomiss = 0.8), data = .x)
+alph <- purrr::map(alph_split, ~ psych::alpha(.x), data = .x) %>%
+  purrr::map(~ .x$total)
+
+# add demos
+comp_df_vig <- as.data.frame(do.call("cbind", comp)) %>% cbind(comp_dat_single_item)
+alph_df_vig <- do.call("rbind", alph) %>% round(., 2)
+
+alph_df_vig %>%
+DT::datatable(
+    extensions = 'Buttons', 
+    options = list(dom = 'Bfrtip', 
+                   buttons = c('excel', "csv"),
+                   pageLength = 20))
+
+```
+
+## Correlations
+
+```{r corr_table, include = T}
+
+corstars <-function(x, method=c("pearson", "spearman"), removeTriangle=c("upper", "lower", "none"),
+                     result=c("none", "html", "latex")){
+    #Compute correlation matrix
+    require(Hmisc)
+    x <- as.matrix(x)
+    correlation_matrix<-rcorr(x, type=method[1])
+    R <- correlation_matrix$r # Matrix of correlation coeficients
+    p <- correlation_matrix$P # Matrix of p-value 
+    
+    ## Define notions for significance levels; spacing is important.
+    mystars <- ifelse(p < .001, "*** ", ifelse(p < .01, "**  ", ifelse(p < .05, "*   ", "    ")))
+    
+    ## trunctuate the correlation matrix to two decimal
+    R <- format(round(cbind(rep(-1.11, ncol(x)), R), 2))[,-1]
+    
+    ## build a new matrix that includes the correlations with their apropriate stars
+    Rnew <- matrix(paste(R, mystars, sep=""), ncol=ncol(x))
+    diag(Rnew) <- paste(diag(R), " ", sep="")
+    rownames(Rnew) <- colnames(x)
+    colnames(Rnew) <- paste(colnames(x), "", sep="")
+    
+    ## remove upper triangle of correlation matrix
+    if(removeTriangle[1]=="upper"){
+      Rnew <- as.matrix(Rnew)
+      Rnew[upper.tri(Rnew, diag = TRUE)] <- ""
+      Rnew <- as.data.frame(Rnew)
+    }
+    
+    ## remove lower triangle of correlation matrix
+    else if(removeTriangle[1]=="lower"){
+      Rnew <- as.matrix(Rnew)
+      Rnew[lower.tri(Rnew, diag = TRUE)] <- ""
+      Rnew <- as.data.frame(Rnew)
+    }
+    else if(removeTriangle[1]=="none"){
+      Rnew <- as.matrix(Rnew)
+      Rnew <- as.data.frame(Rnew)
+    }
+    
+    ## remove last column and return the correlation matrix
+    Rnew <- cbind(Rnew[1:length(Rnew)-1])
+    if (result[1]=="none") return(Rnew)
+    else{
+      if(result[1]=="html") print(xtable(Rnew), type="html")
+      else print(xtable(Rnew), type="latex") 
+    }
+} 
+library(kableExtra)
+
+corstar <- data.frame(corstars(comp_df_vig, removeTriangle = "none", result="none"))
+
+
+corstar %>%
+  DT::datatable(
+    extensions = 'Buttons', 
+    options = list(dom = 'Bfrtip', 
+                   buttons = c('excel', "csv"),
+                   pageLength = 35,
+                  lengthMenu = c(25, 50, 75, 94)))
+
+```
+
+
+
+```{r include = F}
+## get list of participants for blocklist
+
+paste0( vignette_df$ID, collapse=",")
+
+## Recode coping measurement
+comp_df_vig <- comp_df_vig %>% mutate(cope = cope-5)
+```
+
+
+## Density plot of all scales
+
+```{r}
+library("ggpubr")
+ggdensity(comp_df_vig$cope, fill = "lightgray")
+ggdensity(comp_df_vig$quit, fill = "lightgray")
+ggdensity(comp_df_vig$quitting1, fill = "lightgray")
+
+ggdensity(comp_df_vig$satis, fill = "lightgray")
+
+ggqqplot(comp_df_vig$cope)
+
+
+comp_df_vig$log10.quit <- log10(comp_df_vig$quit)
+ggdensity(comp_df_vig$log10.quit, fill = "lightgray")
+
+comp_df_vig$log.quit <- log(comp_df_vig$quit)
+ggdensity(comp_df_vig$log.quit, fill = "lightgray")
+
+comp_df_vig$sqrt.quit <- sqrt(comp_df_vig$quit)
+ggdensity(comp_df_vig$sqrt.quit, fill = "lightgray")
+
+comp_df_vig$inv.quit <- 1/(comp_df_vig$quit)
+ggdensity(comp_df_vig$inv.quit, fill = "lightgray")
+```
+
+
+## Hypotheses tests
+
+### Quit intention 
+
+```{r}
+library(car)
+library(dplyr)
+
+comp_df_vig$cope_scale <- scale(comp_df_vig$cope, scale = F)
+
+model <- (lm(comp_df_vig$quit ~ comp_df_vig$exp_cond * comp_df_vig$cope_scale))
+summary(model)
+plot(model)
+
+library(boot)
+bs <- function(data, indices, maxit = 20) {
+  data <- data[indices,] # allows boot to select sample
+  fit <- lm(quitting1 ~ exp_cond * cope_scale, data=data)
+  return(coef(fit))
+} 
+
+results <- boot(data=comp_df_vig, statistic=bs, 
+   R=1000, maxit = 100)
+
+boot.ci(results, index=4, type=c("norm", "perc", "bca"))
+plot(results, index=2)
+plot(results, index=3)
+plot(results, index=4)
+
+
+## Plus controls
+comp_df_vig$cope_scale <- scale(comp_df_vig$cope, scale = F)
+model <- (lm(comp_df_vig$quit ~ comp_df_vig$exp_cond * comp_df_vig$cope_scale + comp_df_vig$finsit_1 + comp_df_vig$finsit_2 + comp_df_vig$age))
+summary(model)
+
+
+```
+
+#### Box Cox transformation
+
+```{r}
+library(MASS)
+
+## Models without and with transformation
+model1 <- lm(comp_df_vig$quit ~ comp_df_vig$exp_cond * comp_df_vig$cope_scale)
+
+
+boxcox(model1, plotit = TRUE)
+
+bc <- boxcox(comp_df_vig$quit ~ comp_df_vig$exp_cond * comp_df_vig$cope_scale)
+(lambda <- bc$x[which.max(bc$y)])
+
+
+
+comp_df_vig$quit_box <- (comp_df_vig$quit ^ lambda -1) / lambda
+
+
+# transformed quit intention
+model2 <- lm(comp_df_vig$quit_box ~ comp_df_vig$exp_cond * comp_df_vig$cope_scale)
+summary(model2)
+
+plot(model2)
+```
+
+#### Cooks distance and removing outliers
+
+```{r}
+
+cooksd <- cooks.distance(model2)
+
+# Plot the Cook's Distance using the traditional 4/n criterion
+sample_size <- nrow(comp_df_vig)
+plot(cooksd, pch="*", cex=2, main="Influential Obs by Cooks distance")  # plot cook's distance
+abline(h = 4/sample_size, col="red")  # add cutoff line
+text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4/sample_size, names(cooksd),""), col="red")  # add labels
+
+
+## removing outliers
+influential <- as.numeric(names(cooksd)[(cooksd > (4/sample_size))])
+comp_df_vig_screen <- comp_df_vig[-influential, ]
+
+```
+
+#### model with transformation and no outliers
+
+```{r}
+comp_df_vig_screen$exp_cond <- as.factor(comp_df_vig_screen$exp_cond) %>% revalue(., c("1"="control", "2"="experimental"))
+model3<- lm(quit_box ~ exp_cond * cope_scale, data = comp_df_vig_screen)
+plot(model3)
+summary(model3)
+```
+
+#### Simple slopes
+
+```{r}
+library(emmeans)
+
+min.Sd_f <- -(sd(comp_df_vig_screen$cope_scale, na.rm = T))
+max.Sd_f <- (sd(comp_df_vig_screen$cope_scale, na.rm = T))
+
+
+(mylist <- list(cope_scale=c(min.Sd_f,0,max.Sd_f),exp_cond=c("control","experimental")))
+
+emcontcat  <- emmeans(model3, ~ cope_scale*exp_cond, at=mylist)
+
+contrast(emcontcat, "pairwise",by="cope_scale")
+
+
+emmip(model3, exp_cond ~cope_scale, at=mylist,CIs=TRUE, xlab = "Problem-focused coping", ylab = "Transformed quit intention", tlab = "Exp. condition")
+
+ggplot(comp_df_vig_screen, aes(x = cope_scale, y = quit_box, color = exp_cond)) +
+ geom_point(size = .9,
+             alpha = .3) +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  scale_color_brewer(type = "qual", 
+                     palette = 3) +
+  labs(x = "Problem-focused coping",
+       y = "Transformed quit intention",
+       color = "Exp. condition")
+```
+
+#### model with transformation and no outliers and control variables (real financial situation, corona influence, age)
+
+```{r}
+model3<- lm(quit_box ~ exp_cond * cope_scale + finsit_1 + finsit_2 + age, data = comp_df_vig_screen)
+plot(model3)
+summary(model3)
+```
+
+#### model with transformation and outliers and control variables (real financial situation, corona influence, age)
+
+```{r}
+model3<- lm(quit_box ~ exp_cond * cope_scale + finsit_1 + finsit_2 + age, data = comp_df_vig)
+plot(model3)
+summary(model3)
+```
+
+#### Mediation: Finstrain > Threat Appraisal  > Intention to quit
+
+```{r}
+set.seed(1234)
+model <- ' # direct effect
+             quit_box ~ c*exp_cond
+           # mediator
+             threat ~ a*exp_cond
+             quit_box ~ b*threat + finsit_1 + finsit_2 + age
+           # indirect effect (a*b)
+             ab := a*b
+           # total effect
+             total := c + (a*b)
+         '
+fit <- sem(model, data = comp_df_vig)
+summary(fit)
+```
+
+#### Mediation: Finstrain > Challenge Appraisal  > Intention to quit
+
+```{r}
+set.seed(1234)
+model <- ' # direct effect
+             quit_box ~ c*exp_cond
+           # mediator
+             chal ~ a*exp_cond
+             quit_box ~ b*chal + finsit_1 + finsit_2 + age
+           # indirect effect (a*b)
+             ab := a*b
+           # total effect
+             total := c + (a*b)
+         '
+fit <- sem(model, data = comp_df_vig)
+summary(fit)
+```
+
+
+#### Moderated mediation: Finstrain*Problemcoping > Appraisal  > Intention to quit
+
+```{r include = T, echo = T}
+# Only center a subset
+
+Mod.Med.Lavaan <- '
+#Regressions
+threat ~ a1*exp_cond + a2*cope_scale + a3*exp_cond:cope_scale + finsit_1 + finsit_2 + age
+quit_box ~ cdash1*exp_cond + cdash2*cope_scale + cdash3*exp_cond:cope_scale + b1*threat
+
+#Mean of centered (for use in simple slopes)
+#This is making a coefficient which equals the intercept because of the "1"
+#(Y~1) gives you the intercept, which is the mean for our variable
+cope_scale ~ cope_scale.mean*1
+
+#Variance of centered  (for use in simple slopes)
+#This is making a coefficient  which equals the variance because of the "~~"
+#Two tildes separating the same variable gives you the variance
+cope_scale ~~ cope_scale.var*cope_scale
+
+#Indirect effects conditional on moderator (a1 + a3*ModValue)*b1
+indirect.SDbelow := (a1 + a3*(cope_scale.mean-sqrt(cope_scale.var)))*b1
+indirect.SDabove := (a1 + a3*(cope_scale.mean+sqrt(cope_scale.var)))*b1
+
+#Direct effects conditional on moderator (cdash1 + cdash3*ModValue)
+#We have to do it this way because you cannot call the mean and sd functions in lavaan package
+direct.SDbelow := cdash1 + cdash3*(cope_scale.mean-sqrt(cope_scale.var)) 
+direct.SDabove := cdash1 + cdash3*(cope_scale.mean+sqrt(cope_scale.var))
+
+#Total effects conditional on moderator
+total.SDbelow := direct.SDbelow + indirect.SDbelow
+total.SDabove := direct.SDabove + indirect.SDabove
+
+#Proportion mediated conditional on moderator
+#To match the output of "mediate" package
+prop.mediated.SDbelow := indirect.SDbelow / total.SDbelow
+prop.mediated.SDabove := indirect.SDabove / total.SDabove
+
+#Index of moderated mediation
+#An alternative way of testing if conditional indirect effects are significantly different from each other
+index.mod.med := a3*b1
+'
+
+#Fit model
+Mod.Med.SEM <- sem(model = Mod.Med.Lavaan,
+                   data = comp_df_vig,
+                   se = "bootstrap",
+                   bootstrap = 1000)
+
+#Fit measures
+summary(Mod.Med.SEM,
+        fit.measures = FALSE,
+        standardize = TRUE,
+        rsquare = TRUE)
+
+names(comp_df_vig)
+```
+
+
+
+### Life satisfaction
+
+```{r}
+library(car)
+library(dplyr)
+names(comp_df_vig)
+comp_df_vig$cope_scale <- scale(comp_df_vig$cope, scale = F)
+model <- (lm(comp_df_vig$satis ~ comp_df_vig$exp_cond * comp_df_vig$cope_scale))
+summary(model)
+plot(model)
+boxcox(model, plotit = TRUE)
+```
+
+
+
+
+
+
+
+
+
